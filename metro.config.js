@@ -26,7 +26,10 @@ const config = getDefaultConfig(projectRoot);
 // }
 
 // This can be replaced with `find-yarn-workspace-root`
-const monorepoRoot = path.resolve(projectRoot, "../..");
+const monorepoRoot =
+  process.env.EXPO_USE_METRO_WORKSPACE_ROOT === "1"
+    ? path.resolve(projectRoot, "../..")
+    : projectRoot;
 
 // 1. Watch all files within the monorepo
 config.watchFolders = [monorepoRoot];
