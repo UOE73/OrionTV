@@ -1,5 +1,8 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
+const DOUBAN_IMAGE_HOST_PATTERN = /^img\d+\.doubanio\.com$/i;
+const DOUBAN_TENCENT_CDN_HOST = "img.doubanio.cmliussss.net";
+
 // region: --- Interface Definitions ---
 export interface DoubanItem {
   title: string;
@@ -213,7 +216,26 @@ export class API {
   }
 
   getImageProxyUrl(imageUrl: string): string {
-    return `${this.baseURL}/api/image-proxy?url=${encodeURIComponent(imageUrl)}`;
+    if (!imageUrl) {
+      return imageUrl;
+    }
+
+    try {
+      const url = new URL(imageUrl);
+
+      if (DOUBAN_IMAGE_HOST_PATTERN.test(url.hostname)) {
+        url.protocol = "https:";
+        url.hostname = DOUBAN_TENCENT_CDN_HOST;
+        return url.toString();
+      }
+    } catch {
+      // Keep malformed or non-standard source URLs unchanged.
+    }
+
+    // Third-party source posters should be loaded directly. Sending every
+    // image through JoyFlix's authenticated Douban-only proxy causes 401/400
+    // responses in React Native Image requests.
+    return imageUrl;
   }
 
   async getDoubanData(
