@@ -2,18 +2,30 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const DOUBAN_IMAGE_HOST_PATTERN = /^img\d+\.doubanio\.com$/i;
 const DOUBAN_TENCENT_CDN_HOST = "img.doubanio.cmliussss.net";
+const DOUBAN_TENCENT_API_BASE = "https://movie.douban.cmliussss.net";
+const DOUBAN_REQUEST_TIMEOUT_MS = 10000;
 
 // region: --- Interface Definitions ---
 export interface DoubanItem {
   title: string;
   poster: string;
   rate?: string;
+  year?: string;
 }
 
 export interface DoubanResponse {
   code: number;
   message: string;
   list: DoubanItem[];
+}
+
+interface DoubanCdnResponse {
+  subjects: {
+    title: string;
+    cover: string;
+    rate?: string;
+    card_subtitle?: string;
+  }[];
 }
 
 export interface VideoDetail {
@@ -245,6 +257,51 @@ export class API {
     pageStart: number = 0
   ): Promise<DoubanResponse> {
     const url = `/api/douban?type=${type}&tag=${encodeURIComponent(tag)}&pageSize=${pageSize}&pageStart=${pageStart}`;
+
+    // JoyFlix's browser can load Douban data from the Tencent CDN, but
+    // OrionTV cannot read that browser-only localStorage setting. Use the
+    // same CDN by default so filter changes do not depend on the Vercel
+    // function being able to reach movie.douban.com.
+    if (tag !== "top250") {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), DOUBAN_REQUEST_TIMEOUT_MS);
+      const cdnUrl =
+        `${DOUBAN_TENCENT_API_BASE}/j/search_subjects` +
+        `?type=${type}&tag=${encodeURIComponent(tag)}` +
+        `&sort=recommend&page_limit=${pageSize}&page_start=${pageStart}`;
+
+      try {
+        const response = await fetch(cdnUrl, {
+          signal: controller.signal,
+          headers: { Accept: "application/json" },
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = (await response.json()) as DoubanCdnResponse;
+        if (!Array.isArray(data.subjects)) {
+          throw new Error("INVALID_DOUBAN_RESPONSE");
+        }
+
+        return {
+          code: 200,
+          message: "获取成功",
+          list: data.subjects.map((item) => ({
+            title: item.title,
+            poster: item.cover,
+            rate: item.rate,
+            year: item.card_subtitle?.match(/(\d{4})/)?.[1] || "",
+          })),
+        };
+      } catch {
+        // Keep JoyFlix as a fallback for temporary CDN failures.
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+
     const response = await this._fetch(url);
     return response.json();
   }

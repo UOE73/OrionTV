@@ -93,6 +93,7 @@ interface HomeState {
 
 // 内存缓存，应用生命周期内有效
 const dataCache = new Map<string, CacheItem>();
+const inFlightRequests = new Set<string>();
 
 const useHomeStore = create<HomeState>((set, get) => ({
   categories: initialCategories,
@@ -139,6 +140,14 @@ const useHomeStore = create<HomeState>((set, get) => ({
     const { selectedCategory, pageStart, loadingMore, hasMore } = get();
     if (loadingMore || !hasMore) return;
 
+    const categoryCacheKey = getCacheKey(selectedCategory);
+    const requestKey = `${categoryCacheKey}:${pageStart}`;
+    if (inFlightRequests.has(requestKey)) return;
+    inFlightRequests.add(requestKey);
+
+    const isCurrentCategory = () =>
+      getCacheKey(get().selectedCategory) === categoryCacheKey;
+
     if (pageStart > 0) {
       set({ loadingMore: true });
     }
@@ -147,7 +156,9 @@ const useHomeStore = create<HomeState>((set, get) => ({
       if (selectedCategory.type === "record") {
         const { isLoggedIn } = useAuthStore.getState();
         if (!isLoggedIn) {
-          set({ contentData: [], hasMore: false });
+          if (isCurrentCategory()) {
+            set({ contentData: [], hasMore: false });
+          }
           return;
         }
         const records = await PlayRecordManager.getAll();
@@ -170,7 +181,9 @@ const useHomeStore = create<HomeState>((set, get) => ({
           // .filter((record) => record.progress !== undefined && record.progress > 0 && record.progress < 1)
           .sort((a, b) => (b.lastPlayed || 0) - (a.lastPlayed || 0));
 
-        set({ contentData: rowItems, hasMore: false });
+        if (isCurrentCategory()) {
+          set({ contentData: rowItems, hasMore: false });
+        }
       } else if (selectedCategory.type && selectedCategory.tag) {
         const result = await api.getDoubanData(
           selectedCategory.type,
@@ -212,11 +225,13 @@ const useHomeStore = create<HomeState>((set, get) => ({
             hasMore: true // 始终为 true，因为我们允许继续加载
           });
 
-          set({
-            contentData: newItems, // 使用完整的新数据
-            pageStart: newItems.length,
-            hasMore: result.list.length !== 0,
-          });
+          if (isCurrentCategory()) {
+            set({
+              contentData: newItems, // 使用完整的新数据
+              pageStart: newItems.length,
+              hasMore: result.list.length !== 0,
+            });
+          }
         } else {
           // 增量加载时更新缓存
           const existingCache = dataCache.get(cacheKey);
@@ -235,17 +250,23 @@ const useHomeStore = create<HomeState>((set, get) => ({
           }
 
           // 更新状态时使用所有数据
-          set((state) => ({
-            contentData: [...state.contentData, ...newItems],
-            pageStart: state.pageStart + newItems.length,
-            hasMore: result.list.length !== 0,
-          }));
+          if (isCurrentCategory()) {
+            set((state) => ({
+              contentData: [...state.contentData, ...newItems],
+              pageStart: state.pageStart + newItems.length,
+              hasMore: result.list.length !== 0,
+            }));
+          }
         }
       } else if (selectedCategory.tags) {
         // It's a container category, do not load content, but clear current content
-        set({ contentData: [], hasMore: false });
+        if (isCurrentCategory()) {
+          set({ contentData: [], hasMore: false });
+        }
       } else {
-        set({ hasMore: false });
+        if (isCurrentCategory()) {
+          set({ hasMore: false });
+        }
       }
     } catch (err: any) {
       let errorMessage = "加载失败，请重试";
@@ -267,9 +288,14 @@ const useHomeStore = create<HomeState>((set, get) => ({
         errorMessage = "访问被拒绝，请检查权限设置";
       }
 
-      set({ error: errorMessage });
+      if (isCurrentCategory()) {
+        set({ error: errorMessage });
+      }
     } finally {
-      set({ loading: false, loadingMore: false });
+      inFlightRequests.delete(requestKey);
+      if (isCurrentCategory()) {
+        set({ loading: false, loadingMore: false });
+      }
     }
   },
 
@@ -281,13 +307,14 @@ const useHomeStore = create<HomeState>((set, get) => ({
       set({
         selectedCategory: category,
         contentData: [],
+        loading: true,
+        loadingMore: false,
         pageStart: 0,
         hasMore: true,
         error: null
       });
 
       if (category.type === 'record') {
-        get().fetchInitialData();
         return;
       }
 
@@ -304,7 +331,6 @@ const useHomeStore = create<HomeState>((set, get) => ({
         if (cachedData) {
           dataCache.delete(cacheKey);
         }
-        get().fetchInitialData();
       }
     }
   },
